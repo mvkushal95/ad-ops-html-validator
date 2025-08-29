@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>CM360 Zip Creative Validator</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; background: #f7f7f7; }
+    h1 { color: #333; }
+    input[type="file"] { margin-top: 10px; }
+    .results { margin-top: 20px; padding: 15px; background: #fff; border-radius: 8px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+    .pass { color: green; font-weight: bold; }
+    .fail { color: red; font-weight: bold; }
+    p { margin: 5px 0; }
+    img { max-width: 400px; display: block; margin: 5px 0; border: 1px solid #ccc; }
+  </style>
+</head>
+<body>
+<h1>CM360 Zip Creative Validator</h1>
+<input type="file" id="zipInput" accept=".zip" />
+<div class="results" id="results"></div>
+
+<script>
+document.getElementById('zipInput').addEventListener('change', function(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const resultsDiv = document.getElementById("results");
+  resultsDiv.innerHTML = "Processing zip...";
+
+  JSZip.loadAsync(file).then(zip => {
+    let htmlFileName = Object.keys(zip.files).find(name => /index\.html$/i.test(name));
+    if (!htmlFileName) {
+      resultsDiv.innerHTML = "<p class='fail'>✘ No index.html found in zip</p>";
+      return;
+    }
+
+    zip.file(htmlFileName).async("string").then(htmlContent => {
+      validateCreative(htmlContent, zip);
+    });
+  }).catch(err => {
+    resultsDiv.innerHTML = `<p class='fail'>✘ Error reading zip: ${err.message}</p>`;
+  });
+});
+
+function validateCreative(html, zip) {
+  const resultsDiv = document.getElementById("results");
+  resultsDiv.innerHTML = "";
+
+  // Check clickTag
+  const clickTagRegex = /(var\s+clickTag\s*=\s*['"].+['"])|(window\.clickTag\s*=\s*['"].+['"])/i;
+  const hasClickTag = clickTagRegex.test(html);
+  resultsDiv.innerHTML += hasClickTag 
+    ? "<p class='pass'>✔ ClickTag Found</p>" 
+    : "<p class='fail'>✘ ClickTag Missing</p>";
+
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, "text/html");
+  const imgs = Array.from(doc.querySelectorAll("img"));
+
+  if (imgs.length === 0) {
+    resultsDiv.innerHTML += "<p class='fail'>✘ No images found</p>";
+    return;
+  }
+
+  // Load all images as data URLs to measure dimensions
+  const imagePromises = imgs.map(img => {
+    let imgPath = img.getAttribute("src") || "";
+    imgPath = imgPath.replace(/^\.?\//, '');
+    let zipFileName = Object.keys(zip.files).find(fileName => fileName.endsWith(imgPath));
+    if (!zipFileName) return Promise.resolve(null);
+
+    return zip.file(zipFileName).async("base64").then(base64Data => {
+      return new Promise(resolve => {
+        const image = new Image();
+        image.src = `data:image/${getExtension(zipFileName)};base64,${base64Data}`;
+        image.onload = () => resolve({ src: image.src, width: image.naturalWidth, height: image.naturalHeight });
+        image.onerror = () => resolve(null);
+      });
+    });
+  });
+
+  Promise.all(imagePromises).then(imageObjects => {
+    const validImages = imageObjects.filter(i => i !== null);
+    if (validImages.length === 0) {
+      resultsDiv.innerHTML += "<p class='fail'>✘ No valid images found in zip</p>";
+      return;
+    }
+
+    // Pick the largest image (width * height)
+    let mainImage = validImages.reduce((prev, curr) => {
+      return (curr.width * curr.height > prev.width * prev.height) ? curr : prev;
+    });
+
+    const status = document.createElement("p");
+    status.className = "pass";
+    status.textContent = "✔ Main creative asset found:";
+    resultsDiv.appendChild(status);
+
+    const imgElement = document.createElement("img");
+    imgElement.src = mainImage.src;
+    resultsDiv.appendChild(imgElement);
+  });
+}
+
+function getExtension(filename) {
+  const ext = filename.split('.').pop().toLowerCase();
+  return ext === "jpg" ? "jpeg" : ext;
+}
+</script>
+</body>
+</html>
